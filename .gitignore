@@ -1,0 +1,13 @@
+/dali_drv.mod.c
+/dali_app
+/dali_drv.ko
+/dali_drv.mod.o
+/dali_drv.o
+/Module.symvers
+/modules.order
+/.cproject
+/.dali_drv.ko.cmd
+/.dali_drv.mod.o.cmd
+/.dali_drv.o.cmd
+/.project
+/.tmp_versions/dali_drv.mod
