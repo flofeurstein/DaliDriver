@@ -9,6 +9,3 @@ insmod /home/ubuntu/drivers/dali/dali_drv.ko
 chgrp dialout /dev/dali_drv
 chmod 660 /dev/dali_drv
 
-#set direction to "out" or "in"
-#sudo echo "out" > /sys/class/gpio/gpio137/direction
-#sudo echo "in" > /sys/class/gpio/gpio138/direction
