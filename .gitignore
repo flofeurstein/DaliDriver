@@ -11,3 +11,7 @@
 /.dali_drv.o.cmd
 /.project
 /.tmp_versions/dali_drv.mod
+/.settings/language.settings.xml
+/core
+/pre_config_script.sh~
+/Debug
