@@ -22,7 +22,10 @@
 #include <linux/device.h>
 #include <linux/cdev.h>
 #include <linux/slab.h>
- 
+#include <linux/sched.h>
+#include <linux/init.h>
+#include <linux/time.h>
+
 #define GPIO_138            138
 #define GPIO_137            137
 
@@ -32,16 +35,66 @@
 #define DALI_IN_PORT        EXP_HEADER_PIN_5  //Expansion Header port 5. GPIO number 138. Page 108 of BB-xM Sys Ref Manual.
 #define DALI_OUT_PORT       EXP_HEADER_PIN_7  //Expansion Header port 7. GPIO number 137. Page 108 of BB-xM Sys Ref Manual.
 
-#define DALI_BIT_WAIT_TIME  416 //TODO: should be in microseconds
+/*
+ * Microseconds from sending one bit to the next.
+ * Frequency for DALI is 1200 Hz
+ * -> 1s/1200 = 0.000833 s = 833 us
+ *
+ */
+#define DALI_FREQ_MUS       833
 
 #define DALI_DATA_SIZE      2
+
+#define DALI_STOPBIT_VAL    3
  
 static dev_t first;         // Global variable for the first device number
 static struct cdev c_dev;     // Global variable for the character device structure
 static struct class *cl;     // Global variable for the device class
  
 static int init_result;
+
+typedef struct manchesterBitValList_t {
+  struct manchesterBitValList_t *pNext;
+  uint8_t bitVal;
+}manchesterBitValList_t;
+
+static manchesterBitValList_t* pBitValRoot = NULL;
+
+static struct timer_list dali_timer;
+
+static void dali_start_timer(void)
+{
+  dali_timer.expires = jiffies + usecs_to_jiffies(DALI_FREQ_MUS);
+  add_timer(&dali_timer);
+}
+
+static void dali_timerCB(unsigned long arg)
+{
+
+  manchesterBitValList_t* pTemp = NULL;
+
+  if(pBitValRoot != NULL)
+  {
+    gpio_set_value(DALI_OUT_PORT, pBitValRoot->bitVal);
+    printk("Bit val %x \n", pBitValRoot->bitVal);
+
+    if(pBitValRoot->pNext != NULL)
+    {
+      pTemp = pBitValRoot;
+      pBitValRoot = pTemp->pNext;
+      kfree(pTemp);
+      pTemp = NULL;
+      dali_start_timer();
+    }
+    else
+    {
+      kfree(pBitValRoot);
+      pBitValRoot = NULL;
+    }
+  }
+}
  
+
 static ssize_t dali_read( struct file* F, char *buf, size_t count, loff_t *f_pos )
 {
 	char buffer[10];
@@ -71,50 +124,58 @@ static ssize_t dali_read( struct file* F, char *buf, size_t count, loff_t *f_pos
  
 }
 
+
+static void dali_manchesterListAddVal(uint8_t val)
+{
+  manchesterBitValList_t* pTemp = kmalloc(sizeof(manchesterBitValList_t), GFP_KERNEL);
+  pTemp->pNext = kmalloc(sizeof(manchesterBitValList_t), GFP_KERNEL);
+  pTemp->pNext->pNext = NULL;
+  switch(val)
+    {
+      case 0:
+        /*
+         * logical 0 is the transition from 1 to 0
+         * because we
+         */
+        pTemp->bitVal = 0;
+        pTemp->pNext->bitVal = 1;
+        break;
+
+      case DALI_STOPBIT_VAL:
+        pTemp->bitVal = 1;
+        pTemp->pNext->bitVal = 1;
+        break;
+
+      default: //if it's bigger than 0, it's a one
+        pTemp->bitVal = 1;
+        pTemp->pNext->bitVal = 0;
+      break;
+    }
+
+  if(pBitValRoot != NULL){
+    pTemp->pNext->pNext = pBitValRoot;
+  }
+  pBitValRoot = pTemp;
+
+}
+
 /*
- * dali_manchesterSendByte
+ * dali_manchesterListAddByte
  *
- * Manchester encode each bit of the byte and send
- * it to the gpio port. Keep transmission rate
- * at 1200 Hz +- 10% - 0.83 ms per logical bit,
- * about 0.41 (half of the logical bit) per
- * manchester bit
+ * Manchester encode each bit of the byte and add it to
+ * the manchesterBitValList
  *
  * @param byte data to encode and send
  *
  */
-void dali_manchesterSendByte(char byte)
+static void dali_manchesterListAddByte(char byte)
 {
   int i = 0;
 
-  for(i = 7; i >= 0; i--){
-      switch( byte & (0x1 << i) )
-        {
-          case 0:
-            gpio_set_value(DALI_OUT_PORT, 1);
-            //delay(about 0.41 ms);
-            mdelay(DALI_BIT_WAIT_TIME);
-            gpio_set_value(DALI_OUT_PORT, 0);
-            //delay(about 0.41 ms);
-            mdelay(DALI_BIT_WAIT_TIME);
-            printk("10");
-            break;
-
-          default: //if it's bigger than 0, it's a one
-            gpio_set_value(DALI_OUT_PORT, 0);
-            //delay(about 0.41 ms);
-            mdelay(DALI_BIT_WAIT_TIME);
-            gpio_set_value(DALI_OUT_PORT, 1);
-            //delay(about 0.41 ms);
-            mdelay(DALI_BIT_WAIT_TIME);
-            printk("01");
-          break;
-
-//          default:
-//          printk("Wrong option1. %d \n", byte & (0x1 << i));
-//          break;
-        }
-    }
+  for(i = 0; i < 8; i++)
+  {
+    dali_manchesterListAddVal(byte & (0x1 << i));
+  }
 }
 
 static ssize_t dali_write( struct file* F, const char *buf, size_t count, loff_t *f_pos )
@@ -130,43 +191,38 @@ static ssize_t dali_write( struct file* F, const char *buf, size_t count, loff_t
 	printk(KERN_INFO "Executing WRITE.\n");
 
 	/*
-	 * Send start bit: logical 1 manchester code
+	 * Fill the Manchester list from behind (stop bits first, then data byte and address byte, start
+	 * bit last) to get a properly ordered list (adding a node to the
+	 * list adds it to the front!)
+	 *
 	 */
-	gpio_set_value(DALI_OUT_PORT, 0);
-	//delay(about 0.41 ms);
-	//TODO: use a timer!
-	mdelay(DALI_BIT_WAIT_TIME);
-	gpio_set_value(DALI_OUT_PORT, 1);
-	//delay(about 0.41 ms);
-	mdelay(DALI_BIT_WAIT_TIME);
 
 	/*
-	 * Send address byte
-	 */
-	dali_manchesterSendByte(writeBuff[0]);
+   * Send 2 stop bits (idle), no phase change for stop bits
+   */
+	dali_manchesterListAddVal(DALI_STOPBIT_VAL);
+	dali_manchesterListAddVal(DALI_STOPBIT_VAL);
 
 	/*
    * Send data byte
    */
-  dali_manchesterSendByte(writeBuff[1]);
-	 
-  /*
-   * Send 2 stop bits (idle), no phase change for stop bits
-   */
-  gpio_set_value(DALI_OUT_PORT, 1);
-  //delay(about 0.41 ms);
-  mdelay(DALI_BIT_WAIT_TIME);
-  gpio_set_value(DALI_OUT_PORT, 1);
-  //delay(about 0.41 ms);
-  mdelay(DALI_BIT_WAIT_TIME);
-  gpio_set_value(DALI_OUT_PORT, 1);
-  //delay(about 0.41 ms);
-  mdelay(DALI_BIT_WAIT_TIME);
-  gpio_set_value(DALI_OUT_PORT, 1);
-  //delay(about 0.41 ms);
-  mdelay(DALI_BIT_WAIT_TIME);
+	dali_manchesterListAddByte(writeBuff[1]);
 
-  printk("\n");
+	/*
+   * Send address byte
+   */
+	dali_manchesterListAddByte(writeBuff[0]);
+
+	/*
+	 * Send start bit: logical 1 manchester code
+	 */
+	dali_manchesterListAddVal(1);
+
+  printk("start timer \n");
+
+  dali_start_timer();
+
+  printk("timer started \n");
 
 	return DALI_DATA_SIZE;
 }
@@ -239,12 +295,18 @@ static int init_dali(void)
 		return -1;
 	}
 
+	init_timer(&dali_timer);
+	dali_timer.function = dali_timerCB;
+	dali_timer.data = 0;
+
 	return 0;
  
 }
  
 void cleanup_dali(void)
 {
+
+  del_timer_sync(&dali_timer);
 	 
 	cdev_del( &c_dev );
 	device_destroy( cl, first );
