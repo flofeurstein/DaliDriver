@@ -25,6 +25,7 @@
 #include <linux/sched.h>
 #include <linux/init.h>
 #include <linux/time.h>
+#include <linux/hrtimer.h>
 
 #define GPIO_138            138
 #define GPIO_137            137
@@ -38,10 +39,11 @@
 /*
  * Microseconds from sending one bit to the next.
  * Frequency for DALI is 1200 Hz
- * -> 1s/1200 = 0.000833 s = 833 us
+ * -> 1s/1200 = 0.000833 s = 833 us = 833333 ns
  *
  */
-#define DALI_FREQ_MUS       833
+#define DALI_FREQ_SEC       0
+#define DALI_FREQ_NS        833333
 
 #define DALI_DATA_SIZE      2
 
@@ -60,17 +62,19 @@ typedef struct manchesterBitValList_t {
 
 static manchesterBitValList_t* pBitValRoot = NULL;
 
-static struct timer_list dali_timer;
+//hrtimer
+static struct hrtimer high_res_timer;
+#define DALI_TIMER_MODE     HRTIMER_MODE_REL
+ktime_t dali_freq_time;
 
 static void dali_start_timer(void)
 {
-  dali_timer.expires = jiffies + usecs_to_jiffies(DALI_FREQ_MUS);
-  add_timer(&dali_timer);
+  hrtimer_start(&high_res_timer, dali_freq_time, DALI_TIMER_MODE);
 }
 
-static void dali_timerCB(unsigned long arg)
+static enum hrtimer_restart dali_timerCB(struct hrtimer * hrtimer)
 {
-
+  ktime_t now;
   manchesterBitValList_t* pTemp = NULL;
 
   if(pBitValRoot != NULL)
@@ -84,7 +88,9 @@ static void dali_timerCB(unsigned long arg)
       pBitValRoot = pTemp->pNext;
       kfree(pTemp);
       pTemp = NULL;
-      dali_start_timer();
+      now = hrtimer_cb_get_time(&high_res_timer);
+      hrtimer_forward(&high_res_timer,now , dali_freq_time);
+      return HRTIMER_RESTART;
     }
     else
     {
@@ -92,6 +98,7 @@ static void dali_timerCB(unsigned long arg)
       pBitValRoot = NULL;
     }
   }
+  return HRTIMER_NORESTART;
 }
  
 
@@ -110,16 +117,7 @@ static ssize_t dali_read( struct file* F, char *buf, size_t count, loff_t *f_pos
 	{
 		return -EFAULT;
 	}
-	 
-	/*if( *f_pos == 0 )
-	{
-		*f_pos += 1;
-		return 1;
-	}
-	else
-	{
-		return 0;
-	}*/
+
 	return 0;
  
 }
@@ -295,9 +293,12 @@ static int init_dali(void)
 		return -1;
 	}
 
-	init_timer(&dali_timer);
-	dali_timer.function = dali_timerCB;
-	dali_timer.data = 0;
+	/*
+	 * Initialize high res timer
+	 */
+	hrtimer_init(&high_res_timer, CLOCK_MONOTONIC, DALI_TIMER_MODE);
+	dali_freq_time = ktime_set(DALI_FREQ_SEC, DALI_FREQ_NS);
+	high_res_timer.function = dali_timerCB;
 
 	return 0;
  
@@ -306,7 +307,10 @@ static int init_dali(void)
 void cleanup_dali(void)
 {
 
-  del_timer_sync(&dali_timer);
+  if(hrtimer_try_to_cancel(&high_res_timer) < 0)
+  {
+    printk(KERN_ALERT "Timer not stopped!\n");
+  }
 	 
 	cdev_del( &c_dev );
 	device_destroy( cl, first );
