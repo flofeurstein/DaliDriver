@@ -33,17 +33,21 @@
 #define EXP_HEADER_PIN_5    GPIO_138
 #define EXP_HEADER_PIN_7    GPIO_137
 
-#define DALI_IN_PORT        EXP_HEADER_PIN_5  //Expansion Header port 5. GPIO number 138. Page 108 of BB-xM Sys Ref Manual.
-#define DALI_OUT_PORT       EXP_HEADER_PIN_7  //Expansion Header port 7. GPIO number 137. Page 108 of BB-xM Sys Ref Manual.
+#define DALI_IN_PORT        EXP_HEADER_PIN_7  //Expansion Header port 7. GPIO number 137. Page 108 of BB-xM Sys Ref Manual.
+#define DALI_OUT_PORT       EXP_HEADER_PIN_5  //Expansion Header port 5. GPIO number 138. Page 108 of BB-xM Sys Ref Manual.
 
 /*
  * Microseconds from sending one bit to the next.
  * Frequency for DALI is 1200 Hz
  * -> 1s/1200 = 0.000833 s = 833 us = 833333 ns
+ * Because of the Manchester (Bi-Phase) Coding where
+ * two states are sent for one Bit, the ferquency
+ * for the states doubles to 2400 Hz
+ * -> 1s/2400 = 0.000416 s = 416 us = 416666 ns
  *
  */
 #define DALI_FREQ_SEC       0
-#define DALI_FREQ_NS        833333
+#define DALI_FREQ_NS        416666
 
 #define DALI_DATA_SIZE      2
 
