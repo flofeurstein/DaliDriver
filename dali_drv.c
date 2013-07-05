@@ -71,11 +71,25 @@ static struct hrtimer high_res_timer;
 #define DALI_TIMER_MODE     HRTIMER_MODE_REL
 ktime_t dali_freq_time;
 
+/*
+ * dali_start_timer
+ *
+ * Starts the high resolution timer.
+ */
 static void dali_start_timer(void)
 {
   hrtimer_start(&high_res_timer, dali_freq_time, DALI_TIMER_MODE);
 }
 
+/*
+ * dali_timerCB
+ *
+ * Timer callback function. Sends bit if available and restarts
+ * timer if there are more bits to send in manchesterBitValList.
+ *
+ * @param hrtimer is the timer to be restarted
+ * @return returns if the timer was restarted or not
+ */
 static enum hrtimer_restart dali_timerCB(struct hrtimer * hrtimer)
 {
   ktime_t now;
@@ -105,7 +119,17 @@ static enum hrtimer_restart dali_timerCB(struct hrtimer * hrtimer)
   return HRTIMER_NORESTART;
 }
  
-
+/*
+ * dali_read
+ *
+ * Reads bits from GPIO defined in DALI_IN_PORT
+ *
+ * @param F file to be read
+ * @param buf buffer to read data into
+ * @param count bytes that should be read
+ * @param f_pos indicates the file position the user is accessing
+ * @return size that was read
+ */
 static ssize_t dali_read( struct file* F, char *buf, size_t count, loff_t *f_pos )
 {
 	char buffer[10];
@@ -126,7 +150,13 @@ static ssize_t dali_read( struct file* F, char *buf, size_t count, loff_t *f_pos
  
 }
 
-
+/*
+ * dali_manchesterListAddVal
+ *
+ * Adds a logical bit to the manchester list.
+ *
+ * @param val value of the logical bit to add to manchester list
+ */
 static void dali_manchesterListAddVal(uint8_t val)
 {
   manchesterBitValList_t* pTemp = kmalloc(sizeof(manchesterBitValList_t), GFP_KERNEL);
@@ -180,6 +210,17 @@ static void dali_manchesterListAddByte(char byte)
   }
 }
 
+/*
+ * dali_write
+ *
+ * Write bytes from buffer to manchester list.
+ *
+ * @param F file to write to
+ * @param buf buffer that should be written to manchester list
+ * @param count bytes that should be written
+ * @param f_pos indicates the file position to write from
+ * @return size that was written
+ */
 static ssize_t dali_write( struct file* F, const char *buf, size_t count, loff_t *f_pos )
 {
  	char writeBuff[DALI_DATA_SIZE];// = kmalloc(count, GFP_KERNEL);
@@ -229,17 +270,35 @@ static ssize_t dali_write( struct file* F, const char *buf, size_t count, loff_t
 	return DALI_DATA_SIZE;
 }
  
+/*
+ * dali_open
+ *
+ * Open dali driver.
+ *
+ * @param inode node to open
+ * @param file file structure to open
+ */
 static int dali_open( struct inode *inode, struct file *file )
 {
-  gpio_direction_output(DALI_OUT_PORT, 1);
 	return 0;
 }
  
+/*
+ * dali_close
+ *
+ * Close dali driver.
+ *
+ * @param inode node to close
+ * @param file file structure to close
+ */
 static int dali_close( struct inode *inode, struct file *file )
 {
 	return 0;
 }
  
+/*
+ * File operations of the driver.
+ */
 static struct file_operations FileOps =
 {
 .owner        = THIS_MODULE,
@@ -249,6 +308,15 @@ static struct file_operations FileOps =
 .release      = dali_close,
 };
  
+/*
+ * init_dali
+ *
+ * Initialize the dali driver. Request and register device number,
+ * create /sys/class, create device, init char device, init hrtimer,
+ * init GPIO Ports
+ *
+ * @return success state, successfull if >= 0, else error
+ */
 static int init_dali(void)
 { 
 	/*
@@ -304,10 +372,22 @@ static int init_dali(void)
 	dali_freq_time = ktime_set(DALI_FREQ_SEC, DALI_FREQ_NS);
 	high_res_timer.function = dali_timerCB;
 
+	/*
+	 * Initialize GPIO Ports
+	 */
+	gpio_direction_output(DALI_OUT_PORT, 1);
+	gpio_direction_input(DALI_IN_PORT);
+
 	return 0;
  
 }
  
+/*
+ * cleanup_dali
+ *
+ * Clean up dali driver. Stop hrtimer, delete char device,
+ * destroy device, destroy class, unregister device number
+ */
 void cleanup_dali(void)
 {
 
